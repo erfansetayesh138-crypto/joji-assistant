@@ -25,7 +25,7 @@ class Agent(private val ctx: Context, private val key: String) {
         try {
             Speaker.say(key, t)
         } catch (e: Exception) {
-            WakeService.status = "خطای صدا: " + e.message
+            WakeService.lastError = "صدا: " + (e.message ?: "").take(250)
         }
     }
 
@@ -58,7 +58,7 @@ class Agent(private val ctx: Context, private val key: String) {
             val raw = try {
                 Gemini.think(key, system, user, true)
             } catch (e: Exception) {
-                WakeService.status = "خطا: " + e.message
+                WakeService.lastError = "مغز: " + (e.message ?: "").take(250)
                 speak("مشکلی در ارتباط با مغز پیش آمد.")
                 return
             }
@@ -71,7 +71,7 @@ class Agent(private val ctx: Context, private val key: String) {
             val action = obj.optString("action")
             val text = obj.optString("text")
             history.append(step).append(". ").append(obj.toString()).append('\n')
-            WakeService.status = "اقدام: $obj"
+            WakeService.lastLog = "اقدام: $obj"
             when (action) {
                 "say", "done" -> {
                     speak(text)

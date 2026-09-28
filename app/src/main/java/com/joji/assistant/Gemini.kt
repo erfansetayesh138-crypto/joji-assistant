@@ -11,9 +11,15 @@ import java.net.URL
 
 object Gemini {
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
-    const val TEXT_MODEL = "gemini-2.5-flash"
-    const val TTS_MODEL = "gemini-2.5-flash-preview-tts"
+    private val TEXT_MODELS = listOf(
+        "gemini-flash-latest", "gemini-3.6-flash", "gemini-3.5-flash",
+        "gemini-3.1-flash-lite", "gemini-2.5-flash"
+    )
+    private val TTS_MODELS = listOf("gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview")
     const val VOICE = "Charon"
+
+    @Volatile
+    private var goodModel: String? = null
 
     private fun post(model: String, key: String, body: JSONObject): JSONObject {
         val conn = URL("$BASE$model:generateContent").openConnection() as HttpURLConnection
@@ -32,15 +38,33 @@ object Gemini {
     }
 
     fun think(key: String, system: String, user: String, json: Boolean): String {
-        val gen = JSONObject().put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        val gen = JSONObject()
         if (json) gen.put("responseMimeType", "application/json")
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", user)))))
             .put("generationConfig", gen)
-        val res = post(TEXT_MODEL, key, body)
-        return res.getJSONArray("candidates").getJSONObject(0)
-            .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+        val order = listOfNotNull(goodModel) + TEXT_MODELS.filter { it != goodModel }
+        var last: Exception? = null
+        for (m in order) {
+            try {
+                val res = post(m, key, body)
+                val parts = res.getJSONArray("candidates").getJSONObject(0)
+                    .getJSONObject("content").getJSONArray("parts")
+                val sb = StringBuilder()
+                for (i in 0 until parts.length()) {
+                    val p = parts.getJSONObject(i)
+                    if (!p.optBoolean("thought", false)) sb.append(p.optString("text"))
+                }
+                goodModel = m
+                return sb.toString()
+            } catch (e: Exception) {
+                last = RuntimeException(m + " -> " + e.message)
+                val msg = e.message ?: ""
+                if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) break
+            }
+        }
+        throw last ?: RuntimeException("no model")
     }
 
     fun tts(key: String, text: String): ByteArray {
@@ -51,39 +75,55 @@ object Gemini {
                 .put("responseModalities", JSONArray().put("AUDIO"))
                 .put("speechConfig", JSONObject().put("voiceConfig",
                     JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", VOICE)))))
-        val res = post(TTS_MODEL, key, body)
-        val b64 = res.getJSONArray("candidates").getJSONObject(0).getJSONObject("content")
-            .getJSONArray("parts").getJSONObject(0).getJSONObject("inlineData").getString("data")
-        return Base64.decode(b64, Base64.DEFAULT)
+        var last: Exception? = null
+        for (m in TTS_MODELS) {
+            try {
+                val res = post(m, key, body)
+                val b64 = res.getJSONArray("candidates").getJSONObject(0).getJSONObject("content")
+                    .getJSONArray("parts").getJSONObject(0).getJSONObject("inlineData").getString("data")
+                return Base64.decode(b64, Base64.DEFAULT)
+            } catch (e: Exception) {
+                last = RuntimeException(m + " -> " + e.message)
+            }
+        }
+        throw last ?: RuntimeException("no tts model")
     }
 }
 
 object Speaker {
+    @Volatile
+    var busy = false
+
     // Gemini TTS returns raw PCM: 16-bit, mono, 24 kHz
     fun say(key: String, text: String) {
-        val pcm = Gemini.tts(key, text)
-        if (pcm.isEmpty()) return
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(24000)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build()
-            )
-            .setBufferSizeInBytes(pcm.size)
-            .setTransferMode(AudioTrack.MODE_STATIC)
-            .build()
-        track.write(pcm, 0, pcm.size)
-        track.play()
-        val ms = pcm.size / 2 * 1000L / 24000L
-        Thread.sleep(ms + 300)
-        track.release()
+        busy = true
+        try {
+            val pcm = Gemini.tts(key, text)
+            if (pcm.isEmpty()) return
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(24000)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(pcm.size)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+            track.write(pcm, 0, pcm.size)
+            track.play()
+            val ms = pcm.size / 2 * 1000L / 24000L
+            Thread.sleep(ms + 700)
+            track.release()
+        } finally {
+            busy = false
+        }
     }
 }

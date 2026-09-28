@@ -31,6 +31,12 @@ class WakeService : Service() {
         var status: String = "متوقف"
 
         @Volatile
+        var lastError: String = ""
+
+        @Volatile
+        var lastLog: String = ""
+
+        @Volatile
         var running = false
         const val SAMPLE = 16000
     }
@@ -96,6 +102,11 @@ class WakeService : Service() {
             val n = ar.read(buf, 0, buf.size)
             if (n <= 0) {
                 Thread.sleep(20)
+                continue
+            }
+            if (Speaker.busy) {
+                rec.reset()
+                lastShown = ""
                 continue
             }
             val text = if (rec.acceptWaveForm(buf, n)) {

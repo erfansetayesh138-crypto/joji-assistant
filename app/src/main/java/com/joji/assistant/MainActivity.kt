@@ -25,7 +25,7 @@ class MainActivity : Activity() {
     private val ticker = object : Runnable {
         override fun run() {
             val acc = if (JojiAccessibility.instance != null) "روشن" else "خاموش"
-            statusView.text = "وضعیت: ${WakeService.status}\nدسترسی‌پذیری: $acc"
+            statusView.text = "وضعیت: ${WakeService.status}\nدسترسی‌پذیری: $acc\nآخرین رویداد: ${WakeService.lastLog}\nآخرین خطا: ${WakeService.lastError}"
             handler.postDelayed(this, 1000)
         }
     }
